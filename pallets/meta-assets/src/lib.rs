@@ -24,6 +24,7 @@ pub mod pallet {
 	pub struct AssetItem<T: Config> {
 		pub name: Vec<u8>,
 		pub owner: <T as frame_system::Config>::AccountId,
+		pub meta: Option<Vec<u8>>,
 	}
 
 	#[pallet::storage]
@@ -53,13 +54,18 @@ pub mod pallet {
 		/// storage and emits an event. This function must be dispatched by a signed extrinsic.
 		#[pallet::call_index(0)]
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1).ref_time())]
-		pub fn add_asset(origin: OriginFor<T>, asset_name: Vec<u8>) -> DispatchResult {
+		pub fn add_asset(
+			origin: OriginFor<T>,
+			asset_name: Vec<u8>,
+			meta: Option<Vec<u8>>,
+		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
 			ensure!(asset_name.len() > 3, Error::<T>::ShortNameProvided);
 			ensure!(asset_name.len() < 32, Error::<T>::LongNameProvided);
 
-			let asset = AssetItem { name: asset_name.clone(), owner: owner.clone() };
+			let asset =
+				AssetItem { name: asset_name.clone(), owner: owner.clone(), meta: meta.clone() };
 
 			let asset_hash = T::Hashing::hash_of(&asset);
 
@@ -68,6 +74,7 @@ pub mod pallet {
 
 			// Emit an event.
 			Self::deposit_event(Event::AssetWasStored(asset_name, owner));
+
 			// Return a successful DispatchResultWithPostInfo
 			Ok(())
 		}
@@ -84,7 +91,28 @@ pub mod pallet {
 
 			ensure!(asset.owner == owner, Error::<T>::NoneValue);
 
-			let new_asset = AssetItem { name: asset.name, owner: destination.clone() };
+			let new_asset =
+				AssetItem { name: asset.name, owner: destination.clone(), meta: asset.meta };
+
+			<AssetsStore<T>>::insert(hash, new_asset);
+
+			Ok(())
+		}
+
+		#[pallet::call_index(2)]
+		#[pallet::weight(10_000 + T::DbWeight::get().writes(1).ref_time())]
+		pub fn update_meta(
+			origin: OriginFor<T>,
+			hash: T::Hash,
+			meta: Option<Vec<u8>>,
+		) -> DispatchResult {
+			let owner = ensure_signed(origin)?;
+
+			let asset = <AssetsStore<T>>::get(hash).ok_or(Error::<T>::NoneValue)?;
+
+			ensure!(asset.owner == owner, Error::<T>::NoneValue);
+
+			let new_asset = AssetItem { name: asset.name, owner: asset.owner, meta: meta.clone() };
 
 			<AssetsStore<T>>::insert(hash, new_asset);
 
