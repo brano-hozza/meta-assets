@@ -4,6 +4,7 @@ pub use pallet::*;
 
 #[frame_support::pallet]
 pub mod pallet {
+
 	use frame_support::{inherent::Vec, pallet_prelude::*, sp_runtime::traits::Hash};
 	use frame_system::pallet_prelude::*;
 
@@ -24,12 +25,16 @@ pub mod pallet {
 	pub struct AssetItem<T: Config> {
 		pub name: Vec<u8>,
 		pub owner: <T as frame_system::Config>::AccountId,
-		pub meta: Option<Vec<u8>>,
 	}
 
 	#[pallet::storage]
 	#[pallet::getter(fn assets)]
 	pub type AssetsStore<T: Config> = StorageMap<_, Twox64Concat, T::Hash, AssetItem<T>>;
+
+	#[pallet::storage]
+	#[pallet::getter(fn assets_meta)]
+	pub type MetadataStore<T: Config> =
+		StorageDoubleMap<_, Twox64Concat, T::Hash, Twox64Concat, T::AccountId, Option<Vec<u8>>>;
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -43,6 +48,8 @@ pub mod pallet {
 		StorageOverflow,
 		ShortNameProvided,
 		LongNameProvided,
+		InvalidOwner,
+		InvalidHash,
 	}
 
 	// Dispatchable functions allows users to interact with the pallet and invoke state changes.
@@ -64,16 +71,16 @@ pub mod pallet {
 			ensure!(asset_name.len() > 3, Error::<T>::ShortNameProvided);
 			ensure!(asset_name.len() < 32, Error::<T>::LongNameProvided);
 
-			let asset =
-				AssetItem { name: asset_name.clone(), owner: owner.clone(), meta: meta.clone() };
+			let asset = AssetItem { name: asset_name.clone(), owner: owner.clone() };
 
 			let asset_hash = T::Hashing::hash_of(&asset);
 
 			// Update storage.
 			<AssetsStore<T>>::insert(asset_hash, asset);
+			<MetadataStore<T>>::insert(asset_hash, owner.clone(), meta.clone());
 
 			// Emit an event.
-			Self::deposit_event(Event::AssetWasStored(asset_name, owner));
+			Self::deposit_event(Event::AssetWasStored(asset_name, owner.clone()));
 
 			// Return a successful DispatchResultWithPostInfo
 			Ok(())
@@ -87,12 +94,11 @@ pub mod pallet {
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
-			let asset = <AssetsStore<T>>::get(hash).ok_or(Error::<T>::NoneValue)?;
+			let asset = <AssetsStore<T>>::get(hash).ok_or(Error::<T>::InvalidHash)?;
 
-			ensure!(asset.owner == owner, Error::<T>::NoneValue);
+			ensure!(asset.owner == owner, Error::<T>::InvalidOwner);
 
-			let new_asset =
-				AssetItem { name: asset.name, owner: destination.clone(), meta: asset.meta };
+			let new_asset = AssetItem { name: asset.name, owner: destination.clone() };
 
 			<AssetsStore<T>>::insert(hash, new_asset);
 
@@ -108,13 +114,30 @@ pub mod pallet {
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
-			let asset = <AssetsStore<T>>::get(hash).ok_or(Error::<T>::NoneValue)?;
+			ensure!(
+				<MetadataStore<T>>::contains_key(hash, owner.clone()),
+				Error::<T>::InvalidOwner
+			);
 
-			ensure!(asset.owner == owner, Error::<T>::NoneValue);
+			<MetadataStore<T>>::insert(hash, owner, meta.clone());
 
-			let new_asset = AssetItem { name: asset.name, owner: asset.owner, meta: meta.clone() };
+			Ok(())
+		}
 
-			<AssetsStore<T>>::insert(hash, new_asset);
+		#[pallet::call_index(3)]
+		#[pallet::weight(10_000 + T::DbWeight::get().writes(1).ref_time())]
+		pub fn register_admin(
+			origin: OriginFor<T>,
+			hash: T::Hash,
+			admin_address: T::AccountId,
+		) -> DispatchResult {
+			let owner = ensure_signed(origin)?;
+
+			let asset = <AssetsStore<T>>::get(hash).ok_or(Error::<T>::InvalidHash)?;
+
+			ensure!(asset.owner == owner, Error::<T>::InvalidOwner);
+
+			<MetadataStore<T>>::insert(hash, admin_address, None::<Vec<u8>>);
 
 			Ok(())
 		}
