@@ -1,29 +1,41 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+use frame_support::BoundedVec;
 pub use pallet::*;
+use sp_core::Get;
+
+#[cfg(test)]
+mod mock;
 
 #[frame_support::pallet]
 pub mod pallet {
 
-	use frame_support::{inherent::Vec, pallet_prelude::*, sp_runtime::traits::Hash};
+	use super::*;
+	use frame_support::{pallet_prelude::*, sp_runtime::traits::Hash};
 	use frame_system::pallet_prelude::*;
+
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
+	pub type BoundedString<T> = BoundedVec<u8, <T as Config>::StringLimit>;
+
+	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
+	#[pallet::generate_store(pub(super) trait Store)]
+	pub struct Pallet<T>(_);
 
 	/// Configure the pallet by specifying the parameters and types on which it depends.
 	#[pallet::config]
 	pub trait Config: frame_system::Config {
 		/// Because this pallet emits events, it depends on the runtime's definition of an event.
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+
+		type StringLimit: Get<u32>;
 	}
 
-	#[pallet::pallet]
-	#[pallet::generate_store(pub(super) trait Store)]
-	#[pallet::without_storage_info]
-	pub struct Pallet<T>(_);
-
-	#[derive(Clone, Encode, Decode, PartialEq, RuntimeDebug, TypeInfo)]
+	#[derive(Clone, Encode, Decode, PartialEq, TypeInfo, MaxEncodedLen)]
 	#[scale_info(skip_type_params(T))]
 	pub struct AssetItem<T: Config> {
-		pub name: Vec<u8>,
+		pub name: BoundedString<T>,
 		pub owner: <T as frame_system::Config>::AccountId,
 	}
 
@@ -33,23 +45,32 @@ pub mod pallet {
 
 	#[pallet::storage]
 	#[pallet::getter(fn assets_meta)]
-	pub type MetadataStore<T: Config> =
-		StorageDoubleMap<_, Twox64Concat, T::Hash, Twox64Concat, T::AccountId, Option<Vec<u8>>>;
+	pub type MetadataStore<T: Config> = StorageDoubleMap<
+		_,
+		Twox64Concat,
+		T::Hash,
+		Twox64Concat,
+		T::AccountId,
+		Option<BoundedString<T>>,
+	>;
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
-		AssetWasStored(Vec<u8>, T::AccountId),
+		AssetWasStored(T::Hash, T::AccountId), // (asset_hash, owner)
+		AssetWasTransferred(T::Hash, T::AccountId, T::AccountId), // (asset_hash, from, to)
+		MetaUpdated(T::Hash, T::AccountId),    // (asset_hash, owner)
+		AdminRegistered(T::Hash, T::AccountId, T::AccountId), // (asset_hash, owner, new_admin)
 	}
 
 	#[pallet::error]
 	pub enum Error<T> {
-		NoneValue,
-		StorageOverflow,
+		Unauthorized,
+		InvalidHash,
+		InvalidAddress,
 		ShortNameProvided,
 		LongNameProvided,
-		InvalidOwner,
-		InvalidHash,
+		AlreadyRegistered,
 	}
 
 	// Dispatchable functions allows users to interact with the pallet and invoke state changes.
@@ -63,8 +84,8 @@ pub mod pallet {
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1).ref_time())]
 		pub fn add_asset(
 			origin: OriginFor<T>,
-			asset_name: Vec<u8>,
-			meta: Option<Vec<u8>>,
+			asset_name: BoundedString<T>,
+			meta: Option<BoundedString<T>>,
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
@@ -76,11 +97,11 @@ pub mod pallet {
 			let asset_hash = T::Hashing::hash_of(&asset);
 
 			// Update storage.
-			<AssetsStore<T>>::insert(asset_hash, asset);
+			<AssetsStore<T>>::insert(asset_hash, asset.clone());
 			<MetadataStore<T>>::insert(asset_hash, owner.clone(), meta.clone());
 
 			// Emit an event.
-			Self::deposit_event(Event::AssetWasStored(asset_name, owner.clone()));
+			Self::deposit_event(Event::AssetWasStored(asset_hash, asset.owner.clone()));
 
 			// Return a successful DispatchResultWithPostInfo
 			Ok(())
@@ -96,11 +117,18 @@ pub mod pallet {
 
 			let asset = <AssetsStore<T>>::get(hash).ok_or(Error::<T>::InvalidHash)?;
 
-			ensure!(asset.owner == owner, Error::<T>::InvalidOwner);
+			ensure!(asset.owner == owner, Error::<T>::Unauthorized);
 
 			let new_asset = AssetItem { name: asset.name, owner: destination.clone() };
 
 			<AssetsStore<T>>::insert(hash, new_asset);
+
+			// Emit an event.
+			Self::deposit_event(Event::AssetWasTransferred(
+				hash,
+				owner.clone(),
+				destination.clone(),
+			));
 
 			Ok(())
 		}
@@ -110,16 +138,16 @@ pub mod pallet {
 		pub fn update_meta(
 			origin: OriginFor<T>,
 			hash: T::Hash,
-			meta: Option<Vec<u8>>,
+			meta: Option<BoundedString<T>>,
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
-			ensure!(
-				<MetadataStore<T>>::contains_key(hash, owner.clone()),
-				Error::<T>::InvalidOwner
-			);
+			ensure!(<MetadataStore<T>>::contains_key(hash, owner.clone()), Error::<T>::InvalidHash);
 
-			<MetadataStore<T>>::insert(hash, owner, meta.clone());
+			<MetadataStore<T>>::insert(hash, owner.clone(), meta.clone());
+
+			// Emit an event.
+			Self::deposit_event(Event::MetaUpdated(hash, owner.clone()));
 
 			Ok(())
 		}
@@ -135,9 +163,18 @@ pub mod pallet {
 
 			let asset = <AssetsStore<T>>::get(hash).ok_or(Error::<T>::InvalidHash)?;
 
-			ensure!(asset.owner == owner, Error::<T>::InvalidOwner);
+			ensure!(asset.owner == owner, Error::<T>::Unauthorized);
 
-			<MetadataStore<T>>::insert(hash, admin_address, None::<Vec<u8>>);
+			// Check if admin is already registered
+			ensure!(
+				!<MetadataStore<T>>::contains_key(hash, admin_address.clone()),
+				Error::<T>::AlreadyRegistered
+			);
+
+			<MetadataStore<T>>::insert(hash, admin_address.clone(), None::<BoundedString<T>>);
+
+			// Emit an event.
+			Self::deposit_event(Event::AdminRegistered(hash, owner.clone(), admin_address.clone()));
 
 			Ok(())
 		}
