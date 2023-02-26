@@ -26,7 +26,8 @@ frame_support::construct_runtime!(
 );
 
 parameter_types! {
-	pub const RegistryStringLimit: u32 = 10;
+	pub const RegistryStringLimit: u32 = 255;
+	pub const RegistryJsonLimit: u32 = 2048;
 }
 
 impl system::Config for Test {
@@ -59,4 +60,5 @@ impl system::Config for Test {
 impl pallet_meta_assets::Config for Test {
 	type RuntimeEvent = RuntimeEvent;
 	type StringLimit = RegistryStringLimit;
+	type JsonLimit = RegistryJsonLimit;
 }

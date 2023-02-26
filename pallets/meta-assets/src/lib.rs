@@ -18,6 +18,8 @@ pub mod pallet {
 
 	pub type BoundedString<T> = BoundedVec<u8, <T as Config>::StringLimit>;
 
+	pub type BoundedJson<T> = BoundedVec<u8, <T as Config>::JsonLimit>;
+
 	#[pallet::pallet]
 	#[pallet::storage_version(STORAGE_VERSION)]
 	#[pallet::generate_store(pub(super) trait Store)]
@@ -30,6 +32,8 @@ pub mod pallet {
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
 		type StringLimit: Get<u32>;
+
+		type JsonLimit: Get<u32>;
 	}
 
 	#[derive(Clone, Encode, Decode, PartialEq, TypeInfo, MaxEncodedLen)]
@@ -51,7 +55,7 @@ pub mod pallet {
 		T::Hash,
 		Twox64Concat,
 		T::AccountId,
-		Option<BoundedString<T>>,
+		Option<BoundedJson<T>>,
 	>;
 
 	#[pallet::event]
@@ -85,7 +89,7 @@ pub mod pallet {
 		pub fn add_asset(
 			origin: OriginFor<T>,
 			asset_name: BoundedString<T>,
-			meta: Option<BoundedString<T>>,
+			meta: Option<BoundedJson<T>>,
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
@@ -138,11 +142,17 @@ pub mod pallet {
 		pub fn update_meta(
 			origin: OriginFor<T>,
 			hash: T::Hash,
-			meta: Option<BoundedString<T>>,
+			meta: Option<BoundedJson<T>>,
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
-			ensure!(<MetadataStore<T>>::contains_key(hash, owner.clone()), Error::<T>::InvalidHash);
+			ensure!(<AssetsStore<T>>::contains_key(hash), Error::<T>::InvalidHash);
+
+			// Check if admin is registered
+			ensure!(
+				<MetadataStore<T>>::contains_key(hash, owner.clone()),
+				Error::<T>::Unauthorized
+			);
 
 			<MetadataStore<T>>::insert(hash, owner.clone(), meta.clone());
 
@@ -171,7 +181,7 @@ pub mod pallet {
 				Error::<T>::AlreadyRegistered
 			);
 
-			<MetadataStore<T>>::insert(hash, admin_address.clone(), None::<BoundedString<T>>);
+			<MetadataStore<T>>::insert(hash, admin_address.clone(), None::<BoundedJson<T>>);
 
 			// Emit an event.
 			Self::deposit_event(Event::AdminRegistered(hash, owner.clone(), admin_address.clone()));
