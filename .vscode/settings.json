@@ -1,4 +1,13 @@
 {
-  "cSpell.words": ["Twox"],
-  "workbench.colorTheme": "Pale Fire Darker"
+  "cSpell.words": [
+    "hexdisplay",
+    "inherents",
+    "MILLISECS",
+    "offchain",
+    "parachain",
+    "Perbill",
+    "Permill",
+    "Twox"
+  ],
+  "workbench.colorTheme": "One Dark Pro Monokai Darker"
 }
