@@ -16,7 +16,11 @@ pub mod pallet {
 
 	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
 
+	pub type AssetId = u32;
+
 	pub type BoundedString<T> = BoundedVec<u8, <T as Config>::StringLimit>;
+
+	pub type CollectionId<T> = BoundedString<T>;
 
 	pub type BoundedJson<T> = BoundedVec<u8, <T as Config>::JsonLimit>;
 
@@ -43,6 +47,7 @@ pub mod pallet {
 	pub struct Collection<T: Config> {
 		pub description: BoundedString<T>,
 		pub author: <T as frame_system::Config>::AccountId,
+		pub schema: BoundedJson<T>,
 	}
 
 	#[pallet::storage]
@@ -285,8 +290,11 @@ pub mod pallet {
 			origin: OriginFor<T>,
 			name: BoundedString<T>,
 			description: BoundedString<T>,
+			schema: BoundedJson<T>,
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
+
+			let json: Value = serde_json::from_str(schema);
 
 			ensure!(name.len() > 3, Error::<T>::ShortNameProvided);
 			ensure!(name.len() < 32, Error::<T>::LongNameProvided);
@@ -297,7 +305,11 @@ pub mod pallet {
 				Error::<T>::CollectionNameExists
 			);
 
-			let collection = Collection { description: description.clone(), author: owner.clone() };
+			let collection = Collection {
+				description: description.clone(),
+				author: owner.clone(),
+				schema: schema.clone(),
+			};
 
 			// Update storage.
 			<CollectionsStore<T>>::insert(name.clone(), collection.clone());
