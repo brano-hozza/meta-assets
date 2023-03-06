@@ -14,6 +14,7 @@ pub mod pallet {
 	use frame_support::{pallet_prelude::*, sp_runtime::traits::Hash};
 	use frame_system::pallet_prelude::*;
 	use serde_json::Value;
+	use valico::json_schema;
 
 	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
 
@@ -53,8 +54,12 @@ pub mod pallet {
 
 	#[pallet::storage]
 	#[pallet::getter(fn collections)]
-	pub type CollectionsStore<T: Config> =
-		StorageMap<_, Twox64Concat, BoundedString<T>, Collection<T>>;
+	pub type CollectionsStore<T: Config> = StorageMap<
+		_,
+		Twox64Concat,
+		T::Hash,       // Collection ID
+		Collection<T>, // Collection
+	>;
 
 	/// Assets
 	#[derive(Clone, Encode, Decode, PartialEq, TypeInfo, MaxEncodedLen)]
@@ -62,6 +67,7 @@ pub mod pallet {
 	pub struct AssetItem<T: Config> {
 		pub name: BoundedString<T>,
 		pub owner: <T as frame_system::Config>::AccountId,
+		pub meta: BoundedJson<T>,
 	}
 
 	#[pallet::storage]
@@ -69,21 +75,10 @@ pub mod pallet {
 	pub type AssetsStore<T: Config> = StorageDoubleMap<
 		_,
 		Twox64Concat,
-		BoundedString<T>, // Collection name
+		T::Hash, // Collection ID
 		Twox64Concat,
-		T::Hash, //Asset hash
-		AssetItem<T>,
-	>;
-
-	#[pallet::storage]
-	#[pallet::getter(fn assets_meta)]
-	pub type MetadataStore<T: Config> = StorageDoubleMap<
-		_,
-		Twox64Concat,
-		T::Hash,
-		Twox64Concat,
-		T::AccountId,
-		Option<BoundedJson<T>>,
+		T::Hash,      //Asset hash
+		AssetItem<T>, // Asset
 	>;
 
 	#[pallet::event]
@@ -108,7 +103,9 @@ pub mod pallet {
 		LongNameProvided,
 		AlreadyRegistered,
 		InvalidCollection,
-		CollectionNameExists,
+		CollectionAlreadyExists,
+		InvalidJson,
+		InvalidJsonByCollectionSchema,
 	}
 
 	// Dispatchable functions allows users to interact with the pallet and invoke state changes.
@@ -121,27 +118,46 @@ pub mod pallet {
 		pub fn add_asset(
 			origin: OriginFor<T>,
 			asset_name: BoundedString<T>,
-			collection: BoundedString<T>,
-			meta: Option<BoundedJson<T>>,
+			collection_hash: T::Hash,
+			meta: BoundedJson<T>,
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
 			ensure!(asset_name.len() > 3, Error::<T>::ShortNameProvided);
 			ensure!(asset_name.len() < 32, Error::<T>::LongNameProvided);
 
+			// Get collection
+			let collection = CollectionsStore::<T>::get(collection_hash.clone());
+
 			// Check if collection exists
+			ensure!(collection.is_some(), Error::<T>::InvalidCollection);
+
+			// Gather collection JSON schema
+			let schema = collection.unwrap().schema;
+			let j_schema = serde_json::from_str::<Value>(
+				String::from_utf8(schema.clone().to_vec()).unwrap().as_str(),
+			);
+			let mut scope = json_schema::Scope::new();
+			let r_schema = scope.compile_and_return(j_schema.unwrap(), true).ok().unwrap();
+
+			// Validate JSON against schema
 			ensure!(
-				CollectionsStore::<T>::contains_key(collection.clone()),
-				Error::<T>::InvalidCollection
+				r_schema
+					.validate(
+						&serde_json::from_slice::<Value>(meta.clone().to_vec().as_slice()).unwrap(),
+					)
+					.is_valid(),
+				Error::<T>::InvalidJsonByCollectionSchema
 			);
 
-			let asset = AssetItem { name: asset_name.clone(), owner: owner.clone() };
+			// Create asset
+			let asset =
+				AssetItem { name: asset_name.clone(), owner: owner.clone(), meta: meta.clone() };
 
 			let asset_hash = T::Hashing::hash_of(&asset);
 
 			// Update storage.
-			<AssetsStore<T>>::insert(collection.clone(), asset_hash, asset.clone());
-			<MetadataStore<T>>::insert(asset_hash, owner.clone(), meta.clone());
+			<AssetsStore<T>>::insert(collection_hash.clone(), asset_hash, asset.clone());
 
 			// Emit an event.
 			Self::deposit_event(Event::AssetWasStored(asset_hash, asset.owner.clone()));
@@ -155,21 +171,20 @@ pub mod pallet {
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1).ref_time())]
 		pub fn remove_asset(
 			origin: OriginFor<T>,
-			collection: BoundedString<T>,
-			hash: T::Hash,
+			collection_hash: T::Hash,
+			asset_hash: T::Hash,
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
-			let asset =
-				<AssetsStore<T>>::get(collection.clone(), hash).ok_or(Error::<T>::InvalidHash)?;
+			let asset = <AssetsStore<T>>::get(collection_hash.clone(), asset_hash.clone())
+				.ok_or(Error::<T>::InvalidHash)?;
 
 			ensure!(asset.owner == owner, Error::<T>::Unauthorized);
 
-			<AssetsStore<T>>::remove(collection.clone(), hash);
-			<MetadataStore<T>>::remove(hash, owner.clone());
+			<AssetsStore<T>>::remove(collection_hash.clone(), asset_hash.clone());
 
 			// Emit an event.
-			Self::deposit_event(Event::AssetWasRemoved(hash, owner.clone()));
+			Self::deposit_event(Event::AssetWasRemoved(asset_hash, owner.clone()));
 
 			Ok(())
 		}
@@ -178,27 +193,24 @@ pub mod pallet {
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1).ref_time())]
 		pub fn transfer_asset(
 			origin: OriginFor<T>,
-			collection: BoundedString<T>,
-			hash: T::Hash,
+			collection_hash: T::Hash,
+			asset_hash: T::Hash,
 			destination: T::AccountId,
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
-			let asset =
-				<AssetsStore<T>>::get(collection.clone(), hash).ok_or(Error::<T>::InvalidHash)?;
+			let asset = <AssetsStore<T>>::get(collection_hash.clone(), asset_hash.clone())
+				.ok_or(Error::<T>::InvalidHash)?;
 
 			ensure!(asset.owner == owner, Error::<T>::Unauthorized);
 
-			let new_asset = AssetItem { name: asset.name, owner: destination.clone() };
+			let new_asset =
+				AssetItem { name: asset.name, owner: destination.clone(), meta: asset.meta };
 
-			<AssetsStore<T>>::insert(collection.clone(), hash, new_asset);
+			<AssetsStore<T>>::insert(collection_hash.clone(), asset_hash.clone(), new_asset);
 
 			// Emit an event.
-			Self::deposit_event(Event::AssetWasTransferred(
-				hash,
-				owner.clone(),
-				destination.clone(),
-			));
+			Self::deposit_event(Event::AssetWasTransferred(asset_hash, owner, destination));
 
 			Ok(())
 		}
@@ -207,85 +219,56 @@ pub mod pallet {
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1).ref_time())]
 		pub fn update_meta(
 			origin: OriginFor<T>,
-			collection: BoundedString<T>,
-			hash: T::Hash,
-			meta: Option<BoundedJson<T>>,
+			collection_hash: T::Hash,
+			asset_hash: T::Hash,
+			meta: BoundedJson<T>,
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
-			ensure!(<AssetsStore<T>>::contains_key(collection, hash), Error::<T>::InvalidHash);
+			// Get collection
+			let collection = CollectionsStore::<T>::get(collection_hash.clone());
 
-			// Check if admin is registered
+			// Check if collection exists
+			ensure!(collection.is_some(), Error::<T>::InvalidCollection);
+
+			// Gather collection JSON schema
+			let schema = collection.unwrap().schema;
+			let j_schema = serde_json::from_str::<Value>(
+				String::from_utf8(schema.clone().to_vec()).unwrap().as_str(),
+			);
+			let mut scope = json_schema::Scope::new();
+			let r_schema = scope.compile_and_return(j_schema.unwrap(), true).ok().unwrap();
+
+			// Validate JSON against schema
 			ensure!(
-				<MetadataStore<T>>::contains_key(hash, owner.clone()),
-				Error::<T>::Unauthorized
+				r_schema
+					.validate(
+						&serde_json::from_slice::<Value>(meta.clone().to_vec().as_slice()).unwrap(),
+					)
+					.is_valid(),
+				Error::<T>::InvalidJsonByCollectionSchema
 			);
 
-			<MetadataStore<T>>::insert(hash, owner.clone(), meta.clone());
+			ensure!(
+				<AssetsStore<T>>::contains_key(collection_hash.clone(), asset_hash.clone()),
+				Error::<T>::InvalidHash
+			);
+
+			let asset = <AssetsStore<T>>::get(collection_hash, asset_hash.clone()).unwrap();
+
+			ensure!(asset.owner == owner, Error::<T>::Unauthorized);
+
+			let new_asset = AssetItem { name: asset.name, owner: asset.owner, meta: meta.clone() };
+
+			<AssetsStore<T>>::insert(collection_hash, asset_hash.clone(), new_asset);
 
 			// Emit an event.
-			Self::deposit_event(Event::MetaUpdated(hash, owner.clone()));
+			Self::deposit_event(Event::MetaUpdated(asset_hash, owner.clone()));
 
 			Ok(())
 		}
 
 		#[pallet::call_index(4)]
-		#[pallet::weight(10_000 + T::DbWeight::get().writes(1).ref_time())]
-		pub fn register_admin(
-			origin: OriginFor<T>,
-			collection: BoundedString<T>,
-			hash: T::Hash,
-			admin_address: T::AccountId,
-		) -> DispatchResult {
-			let owner = ensure_signed(origin)?;
-
-			let asset = <AssetsStore<T>>::get(collection, hash).ok_or(Error::<T>::InvalidHash)?;
-
-			ensure!(asset.owner == owner, Error::<T>::Unauthorized);
-
-			// Check if admin is already registered
-			ensure!(
-				!<MetadataStore<T>>::contains_key(hash, admin_address.clone()),
-				Error::<T>::AlreadyRegistered
-			);
-
-			<MetadataStore<T>>::insert(hash, admin_address.clone(), None::<BoundedJson<T>>);
-
-			// Emit an event.
-			Self::deposit_event(Event::AdminRegistered(hash, owner.clone(), admin_address.clone()));
-
-			Ok(())
-		}
-
-		#[pallet::call_index(5)]
-		#[pallet::weight(10_000 + T::DbWeight::get().writes(1).ref_time())]
-		pub fn remove_admin(
-			origin: OriginFor<T>,
-			collection: BoundedString<T>,
-			hash: T::Hash,
-			admin_address: T::AccountId,
-		) -> DispatchResult {
-			let owner = ensure_signed(origin)?;
-
-			let asset = <AssetsStore<T>>::get(collection, hash).ok_or(Error::<T>::InvalidHash)?;
-
-			ensure!(asset.owner == owner, Error::<T>::Unauthorized);
-
-			// Check if admin is already registered
-			ensure!(
-				<MetadataStore<T>>::contains_key(hash, admin_address.clone()),
-				Error::<T>::InvalidAddress
-			);
-
-			<MetadataStore<T>>::remove(hash, admin_address.clone());
-
-			// Emit an event.
-			Self::deposit_event(Event::AdminRemoved(hash, owner.clone(), admin_address.clone()));
-
-			Ok(())
-		}
-
-		#[pallet::call_index(6)]
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1).ref_time())]
 		pub fn create_collection(
 			origin: OriginFor<T>,
@@ -295,16 +278,12 @@ pub mod pallet {
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
-			let json: Value = serde_json::from_str(schema);
-
+			let json = serde_json::from_str::<Value>(
+				String::from_utf8(schema.clone().to_vec()).unwrap().as_str(),
+			);
+			ensure!(json.is_ok(), Error::<T>::InvalidJson);
 			ensure!(name.len() > 3, Error::<T>::ShortNameProvided);
 			ensure!(name.len() < 32, Error::<T>::LongNameProvided);
-
-			// Check if name is unique
-			ensure!(
-				!<CollectionsStore<T>>::contains_key(name.clone()),
-				Error::<T>::CollectionNameExists
-			);
 
 			let collection = Collection {
 				description: description.clone(),
@@ -312,8 +291,15 @@ pub mod pallet {
 				schema: schema.clone(),
 			};
 
+			// Check if hash is already used
+			let hash = T::Hashing::hash_of(&collection);
+			ensure!(
+				!<CollectionsStore<T>>::contains_key(hash.clone()),
+				Error::<T>::CollectionAlreadyExists
+			);
+
 			// Update storage.
-			<CollectionsStore<T>>::insert(name.clone(), collection.clone());
+			<CollectionsStore<T>>::insert(hash, collection.clone());
 
 			// Emit an event.
 			Self::deposit_event(Event::CollectionCreated(name.clone(), owner.clone()));
