@@ -13,6 +13,7 @@ pub mod pallet {
 	use super::*;
 	use frame_support::{pallet_prelude::*, sp_runtime::traits::Hash};
 	use frame_system::pallet_prelude::*;
+	use serde_json::Value;
 
 	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
 
