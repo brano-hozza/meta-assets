@@ -20,8 +20,8 @@ frame-benchmarking = { version = "4.0.0-dev", default-features = false, optional
 frame-support = { version = "4.0.0-dev", default-features = false, git = "https://github.com/paritytech/substrate.git", branch = "polkadot-v0.9.37" }
 frame-system = { version = "4.0.0-dev", default-features = false, git = "https://github.com/paritytech/substrate.git", branch = "polkadot-v0.9.37" }
 sp-core = { version = "7.0.0", default-features = false, git = "https://github.com/paritytech/substrate.git", branch = "polkadot-v0.9.37" }
-serde_json = "1.0.94"
-valico = "3.6.1"
+# valico = { version = "4.0.0-rc.3", default-features = false, git = "https://github.com/brano-hozza/valico.git", features = ["js"] } ONLY STD
+serde_json = { version = "1.0.94", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 sp-core = { version = "7.0.0", default-features = false, git = "https://github.com/paritytech/substrate.git", branch = "polkadot-v0.9.37" }

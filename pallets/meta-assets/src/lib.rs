@@ -14,7 +14,7 @@ pub mod pallet {
 	use frame_support::{pallet_prelude::*, sp_runtime::traits::Hash};
 	use frame_system::pallet_prelude::*;
 	use serde_json::Value;
-	use valico::json_schema;
+	// use valico::json_schema; === CANT USE BECAUSE VALICO IS STD ONLY
 
 	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
 
@@ -31,10 +31,8 @@ pub mod pallet {
 	#[pallet::generate_store(pub(super) trait Store)]
 	pub struct Pallet<T>(_);
 
-	/// Configure the pallet by specifying the parameters and types on which it depends.
 	#[pallet::config]
 	pub trait Config: frame_system::Config {
-		/// Because this pallet emits events, it depends on the runtime's definition of an event.
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
 		type StringLimit: Get<u32>;
@@ -42,11 +40,12 @@ pub mod pallet {
 		type JsonLimit: Get<u32>;
 	}
 
-	/// Collections
+	// Collections
 
 	#[derive(Clone, Encode, Decode, PartialEq, TypeInfo, MaxEncodedLen)]
 	#[scale_info(skip_type_params(T))]
 	pub struct Collection<T: Config> {
+		pub name: BoundedString<T>,
 		pub description: BoundedString<T>,
 		pub author: <T as frame_system::Config>::AccountId,
 		pub schema: BoundedJson<T>,
@@ -61,7 +60,7 @@ pub mod pallet {
 		Collection<T>, // Collection
 	>;
 
-	/// Assets
+	// Assets
 	#[derive(Clone, Encode, Decode, PartialEq, TypeInfo, MaxEncodedLen)]
 	#[scale_info(skip_type_params(T))]
 	pub struct AssetItem<T: Config> {
@@ -90,7 +89,8 @@ pub mod pallet {
 		MetaUpdated(T::Hash, T::AccountId),    // (asset_hash, owner)
 		AdminRegistered(T::Hash, T::AccountId, T::AccountId), // (asset_hash, owner, new_admin)
 		AdminRemoved(T::Hash, T::AccountId, T::AccountId), // (asset_hash, owner, removed_admin)
-		CollectionCreated(BoundedString<T>, T::AccountId), // (collection_name, creator)
+		CollectionCreated(T::Hash, T::AccountId), // (collection_name, creator)
+		CollectionRemoved(T::Hash, T::AccountId), // (collection_name, creator)
 		NewAssetInCollection(BoundedString<T>, T::Hash), // (collection_name, asset_hash)
 	}
 
@@ -127,40 +127,47 @@ pub mod pallet {
 			ensure!(asset_name.len() < 32, Error::<T>::LongNameProvided);
 
 			// Get collection
-			let collection = CollectionsStore::<T>::get(collection_hash.clone());
+			let collection = CollectionsStore::<T>::get(collection_hash);
 
 			// Check if collection exists
 			ensure!(collection.is_some(), Error::<T>::InvalidCollection);
 
-			// Gather collection JSON schema
-			let schema = collection.unwrap().schema;
-			let j_schema = serde_json::from_str::<Value>(
-				String::from_utf8(schema.clone().to_vec()).unwrap().as_str(),
+			// Meta json validation
+			let json = serde_json::from_str::<Value>(
+				sp_core::sp_std::str::from_utf8(meta.clone().as_slice()).unwrap(),
 			);
-			let mut scope = json_schema::Scope::new();
-			let r_schema = scope.compile_and_return(j_schema.unwrap(), true).ok().unwrap();
+			ensure!(json.is_ok(), Error::<T>::InvalidJson);
 
-			// Validate JSON against schema
-			ensure!(
-				r_schema
-					.validate(
-						&serde_json::from_slice::<Value>(meta.clone().to_vec().as_slice()).unwrap(),
-					)
-					.is_valid(),
-				Error::<T>::InvalidJsonByCollectionSchema
-			);
+			// ======= CANT DO BECAUSE VALICO IS ONLY STD FOR NOW
+			// Gather collection JSON schema
+			// let schema = collection.unwrap().schema;
+			// let j_schema = serde_json::from_str::<Value>(
+			// 	sp_core::sp_std::str::from_utf8(schema.clone().as_slice()).unwrap(),
+			// );
+			// let mut scope = json_schema::Scope::new();
+			// let r_schema = scope.compile_and_return(j_schema.unwrap(), true).ok().unwrap();
+			//
+			// // Validate JSON against schema
+			// ensure!(
+			// 	r_schema
+			// 		.validate(
+			// 			&serde_json::from_slice::<Value>(meta.clone().to_vec().as_slice()).unwrap(),
+			// 		)
+			// 		.is_valid(),
+			// 	Error::<T>::InvalidJsonByCollectionSchema
+			// );
 
 			// Create asset
 			let asset =
-				AssetItem { name: asset_name.clone(), owner: owner.clone(), meta: meta.clone() };
+				AssetItem { name: asset_name.clone(), owner, meta: meta.clone() };
 
 			let asset_hash = T::Hashing::hash_of(&asset);
 
 			// Update storage.
-			<AssetsStore<T>>::insert(collection_hash.clone(), asset_hash, asset.clone());
+			<AssetsStore<T>>::insert(collection_hash, asset_hash, asset.clone());
 
 			// Emit an event.
-			Self::deposit_event(Event::AssetWasStored(asset_hash, asset.owner.clone()));
+			Self::deposit_event(Event::AssetWasStored(asset_hash, asset.owner));
 
 			// Return a successful DispatchResultWithPostInfo
 			Ok(())
@@ -176,15 +183,15 @@ pub mod pallet {
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
-			let asset = <AssetsStore<T>>::get(collection_hash.clone(), asset_hash.clone())
+			let asset = <AssetsStore<T>>::get(collection_hash, asset_hash)
 				.ok_or(Error::<T>::InvalidHash)?;
 
 			ensure!(asset.owner == owner, Error::<T>::Unauthorized);
 
-			<AssetsStore<T>>::remove(collection_hash.clone(), asset_hash.clone());
+			<AssetsStore<T>>::remove(collection_hash, asset_hash);
 
 			// Emit an event.
-			Self::deposit_event(Event::AssetWasRemoved(asset_hash, owner.clone()));
+			Self::deposit_event(Event::AssetWasRemoved(asset_hash, owner));
 
 			Ok(())
 		}
@@ -199,7 +206,7 @@ pub mod pallet {
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
-			let asset = <AssetsStore<T>>::get(collection_hash.clone(), asset_hash.clone())
+			let asset = <AssetsStore<T>>::get(collection_hash, asset_hash)
 				.ok_or(Error::<T>::InvalidHash)?;
 
 			ensure!(asset.owner == owner, Error::<T>::Unauthorized);
@@ -207,7 +214,7 @@ pub mod pallet {
 			let new_asset =
 				AssetItem { name: asset.name, owner: destination.clone(), meta: asset.meta };
 
-			<AssetsStore<T>>::insert(collection_hash.clone(), asset_hash.clone(), new_asset);
+			<AssetsStore<T>>::insert(collection_hash, asset_hash, new_asset);
 
 			// Emit an event.
 			Self::deposit_event(Event::AssetWasTransferred(asset_hash, owner, destination));
@@ -226,44 +233,51 @@ pub mod pallet {
 			let owner = ensure_signed(origin)?;
 
 			// Get collection
-			let collection = CollectionsStore::<T>::get(collection_hash.clone());
+			let collection = CollectionsStore::<T>::get(collection_hash);
 
 			// Check if collection exists
 			ensure!(collection.is_some(), Error::<T>::InvalidCollection);
 
+			// Meta json validation
+			let json = serde_json::from_str::<Value>(
+				sp_core::sp_std::str::from_utf8(meta.clone().as_slice()).unwrap(),
+			);
+			ensure!(json.is_ok(), Error::<T>::InvalidJson);
+
+			// ======= CANT DO BECAUSE VALICO IS ONLY STD FOR NOW
 			// Gather collection JSON schema
-			let schema = collection.unwrap().schema;
-			let j_schema = serde_json::from_str::<Value>(
-				String::from_utf8(schema.clone().to_vec()).unwrap().as_str(),
-			);
-			let mut scope = json_schema::Scope::new();
-			let r_schema = scope.compile_and_return(j_schema.unwrap(), true).ok().unwrap();
+			// let schema = collection.unwrap().schema;
+			// let j_schema = serde_json::from_str::<Value>(
+			// 	sp_core::sp_std::str::from_utf8(schema.clone().as_slice()).unwrap(),
+			// );
+			// let mut scope = json_schema::Scope::new();
+			// let r_schema = scope.compile_and_return(j_schema.unwrap(), true).ok().unwrap();
+			//
+			// // Validate JSON against schema
+			// ensure!(
+			// 	r_schema
+			// 		.validate(
+			// 			&serde_json::from_slice::<Value>(meta.clone().to_vec().as_slice()).unwrap(),
+			// 		)
+			// 		.is_valid(),
+			// 	Error::<T>::InvalidJsonByCollectionSchema
+			// );
 
-			// Validate JSON against schema
 			ensure!(
-				r_schema
-					.validate(
-						&serde_json::from_slice::<Value>(meta.clone().to_vec().as_slice()).unwrap(),
-					)
-					.is_valid(),
-				Error::<T>::InvalidJsonByCollectionSchema
-			);
-
-			ensure!(
-				<AssetsStore<T>>::contains_key(collection_hash.clone(), asset_hash.clone()),
+				<AssetsStore<T>>::contains_key(collection_hash, asset_hash),
 				Error::<T>::InvalidHash
 			);
 
-			let asset = <AssetsStore<T>>::get(collection_hash, asset_hash.clone()).unwrap();
+			let asset = <AssetsStore<T>>::get(collection_hash, asset_hash).unwrap();
 
 			ensure!(asset.owner == owner, Error::<T>::Unauthorized);
 
 			let new_asset = AssetItem { name: asset.name, owner: asset.owner, meta: meta.clone() };
 
-			<AssetsStore<T>>::insert(collection_hash, asset_hash.clone(), new_asset);
+			<AssetsStore<T>>::insert(collection_hash, asset_hash, new_asset);
 
 			// Emit an event.
-			Self::deposit_event(Event::MetaUpdated(asset_hash, owner.clone()));
+			Self::deposit_event(Event::MetaUpdated(asset_hash, owner));
 
 			Ok(())
 		}
@@ -279,13 +293,14 @@ pub mod pallet {
 			let owner = ensure_signed(origin)?;
 
 			let json = serde_json::from_str::<Value>(
-				String::from_utf8(schema.clone().to_vec()).unwrap().as_str(),
+				sp_core::sp_std::str::from_utf8(schema.clone().as_slice()).unwrap(),
 			);
 			ensure!(json.is_ok(), Error::<T>::InvalidJson);
 			ensure!(name.len() > 3, Error::<T>::ShortNameProvided);
 			ensure!(name.len() < 32, Error::<T>::LongNameProvided);
 
 			let collection = Collection {
+				name: name.clone(),
 				description: description.clone(),
 				author: owner.clone(),
 				schema: schema.clone(),
@@ -294,17 +309,38 @@ pub mod pallet {
 			// Check if hash is already used
 			let hash = T::Hashing::hash_of(&collection);
 			ensure!(
-				!<CollectionsStore<T>>::contains_key(hash.clone()),
+				!<CollectionsStore<T>>::contains_key(hash),
 				Error::<T>::CollectionAlreadyExists
 			);
 
 			// Update storage.
-			<CollectionsStore<T>>::insert(hash, collection.clone());
+			<CollectionsStore<T>>::insert(hash, collection);
 
 			// Emit an event.
-			Self::deposit_event(Event::CollectionCreated(name.clone(), owner.clone()));
+			Self::deposit_event(Event::CollectionCreated(hash, owner));
 
 			// Return a successful DispatchResultWithPostInfo
+			Ok(())
+		}
+		// Method to remove collection from the store.
+		#[pallet::call_index(5)]
+		#[pallet::weight(10_000 + T::DbWeight::get().writes(1).ref_time())]
+		pub fn remove_collection(
+			origin: OriginFor<T>,
+			collection_hash: T::Hash,
+		) -> DispatchResult {
+			let owner = ensure_signed(origin)?;
+
+			let collection = <CollectionsStore<T>>::get(collection_hash)
+				.ok_or(Error::<T>::InvalidHash)?;
+
+			ensure!(collection.author == owner, Error::<T>::Unauthorized);
+
+			<CollectionsStore<T>>::remove(collection_hash);
+
+			// Emit an event.
+			Self::deposit_event(Event::CollectionRemoved(collection_hash, owner));
+
 			Ok(())
 		}
 	}
