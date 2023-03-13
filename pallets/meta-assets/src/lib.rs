@@ -49,6 +49,7 @@ pub mod pallet {
 		pub description: BoundedString<T>,
 		pub author: <T as frame_system::Config>::AccountId,
 		pub schema: BoundedJson<T>,
+		pub items_count: u32
 	}
 
 	#[pallet::storage]
@@ -90,6 +91,7 @@ pub mod pallet {
 		AdminRegistered(T::Hash, T::AccountId, T::AccountId), // (asset_hash, owner, new_admin)
 		AdminRemoved(T::Hash, T::AccountId, T::AccountId), // (asset_hash, owner, removed_admin)
 		CollectionCreated(T::Hash, T::AccountId), // (collection_name, creator)
+		CollectionUpdated(T::Hash, T::AccountId),
 		CollectionRemoved(T::Hash, T::AccountId), // (collection_name, creator)
 		NewAssetInCollection(BoundedString<T>, T::Hash), // (collection_name, asset_hash)
 	}
@@ -106,6 +108,7 @@ pub mod pallet {
 		CollectionAlreadyExists,
 		InvalidJson,
 		InvalidJsonByCollectionSchema,
+		SomeAssetsExists
 	}
 
 	// Dispatchable functions allows users to interact with the pallet and invoke state changes.
@@ -131,6 +134,7 @@ pub mod pallet {
 
 			// Check if collection exists
 			ensure!(collection.is_some(), Error::<T>::InvalidCollection);
+
 
 			// Meta json validation
 			let json = serde_json::from_str::<Value>(
@@ -166,6 +170,12 @@ pub mod pallet {
 			// Update storage.
 			<AssetsStore<T>>::insert(collection_hash, asset_hash, asset.clone());
 
+			// Update collection
+			let mut updated_collection = collection.unwrap();
+			updated_collection.items_count += 1;
+			<CollectionsStore<T>>::insert(collection_hash, updated_collection);
+			Self::deposit_event(Event::CollectionUpdated(collection_hash, asset.owner.clone()));
+
 			// Emit an event.
 			Self::deposit_event(Event::AssetWasStored(asset_hash, asset.owner));
 
@@ -189,6 +199,12 @@ pub mod pallet {
 			ensure!(asset.owner == owner, Error::<T>::Unauthorized);
 
 			<AssetsStore<T>>::remove(collection_hash, asset_hash);
+
+			// Update collection
+			let mut updated_collection = CollectionsStore::<T>::get(collection_hash).unwrap();
+			updated_collection.items_count += 1;
+			<CollectionsStore<T>>::insert(collection_hash, updated_collection);
+			Self::deposit_event(Event::CollectionUpdated(collection_hash, asset.owner));
 
 			// Emit an event.
 			Self::deposit_event(Event::AssetWasRemoved(asset_hash, owner));
@@ -304,6 +320,7 @@ pub mod pallet {
 				description: description.clone(),
 				author: owner.clone(),
 				schema: schema.clone(),
+				items_count: 0
 			};
 
 			// Check if hash is already used
@@ -335,6 +352,9 @@ pub mod pallet {
 				.ok_or(Error::<T>::InvalidHash)?;
 
 			ensure!(collection.author == owner, Error::<T>::Unauthorized);
+
+			// Check if collection is empty
+			ensure!(collection.items_count == 0, Error::<T>::SomeAssetsExists);
 
 			<CollectionsStore<T>>::remove(collection_hash);
 
