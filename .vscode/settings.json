@@ -3,11 +3,13 @@
     "hexdisplay",
     "inherents",
     "MILLISECS",
+    "nonfungibles",
     "offchain",
     "parachain",
     "Perbill",
     "Permill",
-    "Twox"
+    "Twox",
+    "VALICO"
   ],
   "workbench.colorTheme": "Tokyo Night Storm"
 }

@@ -1,10 +1,10 @@
-use crate as pallet_meta_assets;
+use crate::{self as pallet_meta_assets};
 use frame_support::{
 	parameter_types,
 	traits::{ConstU16, ConstU64},
 };
 use frame_system as system;
-use sp_core::H256;
+use sp_core::{crypto::AccountId32, H256};
 use sp_runtime::{
 	testing::Header,
 	traits::{BlakeTwo256, IdentityLookup},
@@ -12,6 +12,7 @@ use sp_runtime::{
 
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
+type AccountId = AccountId32;
 
 // Configure a mock runtime to test the pallet.
 frame_support::construct_runtime!(
@@ -41,7 +42,7 @@ impl system::Config for Test {
 	type BlockNumber = u64;
 	type Hash = H256;
 	type Hashing = BlakeTwo256;
-	type AccountId = u64;
+	type AccountId = AccountId;
 	type Lookup = IdentityLookup<Self::AccountId>;
 	type Header = Header;
 	type RuntimeEvent = RuntimeEvent;
@@ -61,4 +62,28 @@ impl pallet_meta_assets::Config for Test {
 	type RuntimeEvent = RuntimeEvent;
 	type StringLimit = RegistryStringLimit;
 	type JsonLimit = RegistryJsonLimit;
+}
+
+pub const ALICE: AccountId = AccountId::new([1u8; 32]);
+pub const BOB: AccountId = AccountId::new([2u8; 32]);
+
+pub struct ExtBuilder;
+
+impl ExtBuilder {
+	pub fn build(self) -> sp_io::TestExternalities {
+		let mut t = system::GenesisConfig::default().build_storage::<Test>().unwrap();
+		let mut ext = sp_io::TestExternalities::new(t);
+		ext.execute_with(|| System::set_block_number(1));
+		ext
+	}
+}
+
+pub fn only_pallet_events() -> Vec<super::Event<Test>> {
+	System::events()
+		.into_iter()
+		.map(|r| r.event)
+		.filter_map(
+			|e| if let RuntimeEvent::MetaAssetsModule(inner) = e { Some(inner) } else { None },
+		)
+		.collect::<Vec<_>>()
 }
