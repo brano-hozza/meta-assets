@@ -67,6 +67,12 @@ impl pallet_meta_assets::Config for Test {
 pub const ALICE: AccountId = AccountId::new([1u8; 32]);
 pub const BOB: AccountId = AccountId::new([2u8; 32]);
 
+pub const SHORT_COLLECTION_NAME: &[u8] = b"y";
+pub const LONG_COLLECTION_NAME: &[u8] = b"Her extensive perceived may any sincerity extremity. Indeed add rather may pretty see. Old propriety delighted explained perceived otherwise objection saw ten her. Doubt merit sir the right these alone keeps.";
+
+pub const SHORT_ASSET_NAME: &[u8] = b"x";
+pub const LONG_ASSET_NAME: &[u8] = b"Her extensive perceived may any sincerity extremity. Indeed add rather may pretty see. Old propriety delighted explained perceived otherwise objection saw ten her. Doubt merit sir the right these alone keeps.";
+
 pub struct ExtBuilder;
 
 impl ExtBuilder {
@@ -78,7 +84,7 @@ impl ExtBuilder {
 	}
 }
 
-pub fn only_pallet_events() -> Vec<super::Event<Test>> {
+pub fn get_pallet_events() -> Vec<super::Event<Test>> {
 	System::events()
 		.into_iter()
 		.map(|r| r.event)
@@ -86,4 +92,8 @@ pub fn only_pallet_events() -> Vec<super::Event<Test>> {
 			|e| if let RuntimeEvent::MetaAssetsModule(inner) = e { Some(inner) } else { None },
 		)
 		.collect::<Vec<_>>()
+}
+
+pub fn get_latest_event() -> super::Event<Test> {
+	get_pallet_events().last().unwrap().to_owned()
 }

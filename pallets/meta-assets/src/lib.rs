@@ -321,7 +321,7 @@ pub mod pallet {
 			);
 			ensure!(json.is_ok(), Error::<T>::InvalidJson);
 			ensure!(name.len() > 3, Error::<T>::ShortNameProvided);
-			ensure!(name.len() < 32, Error::<T>::LongNameProvided);
+			ensure!(name.len() < 200, Error::<T>::LongNameProvided);
 
 			let collection = Collection {
 				name: name.clone(),

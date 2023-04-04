@@ -31,13 +31,10 @@ fn create_asset(collection_hash: H256, name: &[u8], meta: &[u8]) -> DispatchResu
 	)
 }
 #[test]
-fn it_creates_collection() {
+fn it_should_create_collection() {
 	ExtBuilder.build().execute_with(|| {
 		assert_ok!(create_collection(b"Collection 1", b"Description xyz", b"{}"));
-
-		let events = only_pallet_events();
-
-		assert_eq!(events.len(), 1);
+		assert_eq!(get_pallet_events().len(), 1);
 	})
 }
 
@@ -51,13 +48,22 @@ fn it_should_not_create_duplicate_collection() {
 		);
 	})
 }
+#[test]
+fn it_should_not_create_collection_with_invalid_schema() {
+	ExtBuilder.build().execute_with(|| {
+		assert_noop!(
+			create_collection(b"Collection 1", b"Description xyz", b"{lol"),
+			Error::<Test>::InvalidJson
+		);
+	})
+}
 
 #[test]
-fn it_removes_collection() {
+fn it_should_remove_collection() {
 	ExtBuilder.build().execute_with(|| {
 		assert_ok!(create_collection(b"Collection 1", b"Description xyz", b"{}"));
 
-		let collection_hash = match only_pallet_events().last().unwrap().to_owned() {
+		let collection_hash = match get_latest_event() {
 			Event::CollectionCreated { collection_hash, owner: _ } => collection_hash,
 			_ => panic!("Unexpected event"),
 		};
@@ -66,7 +72,7 @@ fn it_removes_collection() {
 			collection_hash
 		));
 
-		assert_eq!(only_pallet_events().len(), 2);
+		assert_eq!(get_pallet_events().len(), 2);
 	})
 }
 
@@ -75,7 +81,7 @@ fn it_should_not_remove_collection() {
 	ExtBuilder.build().execute_with(|| {
 		assert_ok!(create_collection(b"Collection 1", b"Description xyz", b"{}"));
 
-		let collection_hash = match only_pallet_events().last().unwrap().to_owned() {
+		let collection_hash = match get_latest_event() {
 			Event::CollectionCreated { collection_hash, owner: _ } => collection_hash,
 			_ => panic!("Unexpected event"),
 		};
@@ -89,18 +95,34 @@ fn it_should_not_remove_collection() {
 }
 
 #[test]
-fn it_creates_asset_in_collection() {
+fn it_should_create_asset_in_collection() {
 	ExtBuilder.build().execute_with(|| {
 		assert_ok!(create_collection(b"Collection 1", b"Description xyz", b"{}"));
 
-		let collection_hash = match only_pallet_events().last().unwrap().to_owned() {
+		let collection_hash = match get_latest_event() {
 			Event::CollectionCreated { collection_hash, owner: _ } => collection_hash,
 			_ => panic!("Unexpected event"),
 		};
 
 		assert_ok!(create_asset(collection_hash, b"Asset 1", b"{}"));
 
-		assert_eq!(only_pallet_events().len(), 3);
+		assert_eq!(get_pallet_events().len(), 3);
+	})
+}
+#[test]
+fn it_should_not_create_asset_with_invalid_metadata() {
+	ExtBuilder.build().execute_with(|| {
+		assert_ok!(create_collection(b"Collection 1", b"Description xyz", b"{}"));
+
+		let collection_hash = match get_latest_event() {
+			Event::CollectionCreated { collection_hash, owner: _ } => collection_hash,
+			_ => panic!("Unexpected event"),
+		};
+
+		assert_noop!(
+			create_asset(collection_hash, b"Asset 1", b"{lol"),
+			Error::<Test>::InvalidJson
+		);
 	})
 }
 #[test]
@@ -108,12 +130,25 @@ fn it_should_not_create_asset_with_short_name() {
 	ExtBuilder.build().execute_with(|| {
 		assert_ok!(create_collection(b"Collection 1", b"Description xyz", b"{}"));
 
-		let collection_hash = match only_pallet_events().last().unwrap().to_owned() {
+		let collection_hash = match get_latest_event() {
 			Event::CollectionCreated { collection_hash, owner: _ } => collection_hash,
 			_ => panic!("Unexpected event"),
 		};
 
-		assert_noop!(create_asset(collection_hash, b"", b"{}"), Error::<Test>::ShortNameProvided);
+		assert_noop!(
+			create_asset(collection_hash, SHORT_ASSET_NAME, b"{}"),
+			Error::<Test>::ShortNameProvided
+		);
+	})
+}
+
+#[test]
+fn it_should_not_create_collection_with_short_name() {
+	ExtBuilder.build().execute_with(|| {
+		assert_noop!(
+			create_collection(SHORT_COLLECTION_NAME, b"Description xyz", b"{}"),
+			Error::<Test>::ShortNameProvided
+		);
 	})
 }
 
@@ -122,28 +157,41 @@ fn it_should_not_create_asset_with_long_name() {
 	ExtBuilder.build().execute_with(|| {
 		assert_ok!(create_collection(b"Collection 1", b"Description xyz", b"{}"));
 
-		let collection_hash = match only_pallet_events().last().unwrap().to_owned() {
+		let collection_hash = match get_latest_event() {
 			Event::CollectionCreated { collection_hash, owner: _ } => collection_hash,
 			_ => panic!("Unexpected event"),
 		};
 
-		assert_noop!(create_asset(collection_hash, b"Her extensive perceived may any sincerity extremity. Indeed add rather may pretty see. Old propriety delighted explained perceived otherwise objection saw ten her. Doubt merit sir the right these alone keeps. ", b"{}"), Error::<Test>::LongNameProvided);
+		assert_noop!(
+			create_asset(collection_hash, LONG_ASSET_NAME, b"{}"),
+			Error::<Test>::LongNameProvided
+		);
 	})
 }
 
 #[test]
-fn it_transfers_asset_to_bob() {
+fn it_should_not_create_collection_with_long_name() {
+	ExtBuilder.build().execute_with(|| {
+		assert_noop!(
+			create_collection(LONG_COLLECTION_NAME, b"Description xyz", b"{}"),
+			Error::<Test>::LongNameProvided
+		);
+	})
+}
+
+#[test]
+fn it_should_transfer_asset_to_bob() {
 	ExtBuilder.build().execute_with(|| {
 		assert_ok!(create_collection(b"Collection 1", b"Description xyz", b"{}"));
 
-		let collection_hash = match only_pallet_events().last().unwrap().to_owned() {
+		let collection_hash = match get_latest_event() {
 			Event::CollectionCreated { collection_hash, owner: _ } => collection_hash,
 			_ => panic!("Unexpected event"),
 		};
 
 		assert_ok!(create_asset(collection_hash, b"Asset 1", b"{}"));
 
-		let asset_hash = match only_pallet_events().last().unwrap().to_owned() {
+		let asset_hash = match get_latest_event() {
 			Event::AssetWasStored { asset_hash, owner: _ } => asset_hash,
 			_ => panic!("Unexpected event"),
 		};
