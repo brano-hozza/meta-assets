@@ -130,7 +130,7 @@ pub mod pallet {
 			let owner = ensure_signed(origin)?;
 
 			ensure!(asset_name.len() > 3, Error::<T>::ShortNameProvided);
-			ensure!(asset_name.len() < 32, Error::<T>::LongNameProvided);
+			ensure!(asset_name.len() < 200, Error::<T>::LongNameProvided);
 
 			// Get collection
 			let collection = CollectionsStore::<T>::get(collection_hash);
