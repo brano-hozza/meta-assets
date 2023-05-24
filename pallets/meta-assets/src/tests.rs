@@ -52,7 +52,7 @@ fn it_should_not_create_duplicate_collection() {
 fn it_should_not_create_collection_with_invalid_schema() {
 	ExtBuilder.build().execute_with(|| {
 		assert_noop!(
-			create_collection(b"Collection 1", b"Description xyz", b"{lol"),
+			create_collection(b"Collection 1", b"Description xyz", b"{"),
 			Error::<Test>::InvalidJson
 		);
 	})

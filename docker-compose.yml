@@ -10,8 +10,7 @@ services:
     environment:
       - CARGO_HOME=/var/www/node-template/.cargo
     volumes:
-      - .:/var/www/node-template
-      - type: bind
-        source: ./.local
-        target: /root/.local
+      - substrate:/var/www/node-template
     command: bash -c "cargo build --release && ./target/release/node-template --dev --ws-external"
+volumes:
+  substrate:

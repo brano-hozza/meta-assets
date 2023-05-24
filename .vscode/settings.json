@@ -11,5 +11,9 @@
     "Twox",
     "VALICO"
   ],
-  "workbench.colorTheme": "Tokyo Night Storm"
+  "rust-analyzer.linkedProjects": [
+    "./pallets/meta-assets/Cargo.toml",
+    "./pallets/meta-assets/Cargo.toml"
+  ],
+  "rust-analyzer.showUnlinkedFileNotification": false
 }
